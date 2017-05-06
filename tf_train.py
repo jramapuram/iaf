@@ -84,7 +84,7 @@ class IAFLayer(object):
                     kl_obj = tf.reduce_sum(kl_cost, [1, 2, 3])
                 kl_cost = tf.reduce_sum(kl_cost, [1, 2, 3])
 
-            h = tf.concat(1, [z, h_det])
+            h = tf.concat(axis=1, values=[z, h_det])
             h = tf.nn.elu(h)
             if self.downsample:
                 input = resize_nearest_neighbor(input, 2)
@@ -114,17 +114,22 @@ def get_default_hparams():
 
 class CVAE1(object):
     def __init__(self, hps, mode, x=None):
+        #with tf.variable_scope("CVAE", reuse=None) as vs:
         self.hps = hps
         self.mode = mode
-        input_shape = [hps.batch_size * hps.num_gpus, 3, hps.image_size, hps.image_size]
+        input_shape = [hps.batch_size * hps.num_gpus, 3,
+                       hps.image_size, hps.image_size]
         self.x = tf.placeholder(tf.uint8, shape=input_shape) if x is None else x
         self.m_trunc = []
-        self.dec_log_stdv = tf.get_variable("dec_log_stdv", initializer=tf.constant(0.0))
+        self.dec_log_stdv = tf.get_variable("dec_log_stdv",
+                                            initializer=tf.constant(0.0))
 
         losses = []
         grads = []
-        xs = tf.split(0, hps.num_gpus, self.x)
+        xs = tf.split(axis=0, num_or_size_splits=hps.num_gpus,
+                      value=self.x)
         opt = AdamaxOptimizer(hps.learning_rate)
+        #opt = tf.train.AdamOptimizer(hps.learning_rate)
 
         num_pixels = 3 * hps.image_size * hps.image_size
         for i in range(hps.num_gpus):
@@ -145,8 +150,8 @@ class CVAE1(object):
             # add gradients together and get training updates
             grad = average_grads(grads)
             self.train_op = opt.apply_gradients(grad, global_step=self.global_step)
-            tf.scalar_summary("model/bits_per_dim", self.bits_per_dim)
-            tf.scalar_summary("model/dec_log_stdv", self.dec_log_stdv)
+            tf.summary.scalar("model/bits_per_dim", self.bits_per_dim)
+            tf.summary.scalar("model/dec_log_stdv", self.dec_log_stdv)
             self.summary_op = tf.merge_all_summaries()
         else:
             self.train_op = tf.no_op()
@@ -200,8 +205,8 @@ class CVAE1(object):
                         kl_cost += cur_cost
 
                         if self.mode == "train" and gpu == hps.num_gpus - 1:
-                            tf.scalar_summary("model/kl_obj_%02d_%02d" % (i, j), tf.reduce_mean(cur_obj))
-                            tf.scalar_summary("model/kl_cost_%02d_%02d" % (i, j), tf.reduce_mean(cur_cost))
+                            tf.summary.scalar("model/kl_obj_%02d_%02d" % (i, j), tf.reduce_mean(cur_obj))
+                            tf.summary.scalar("model/kl_cost_%02d_%02d" % (i, j), tf.reduce_mean(cur_cost))
 
             x = tf.nn.elu(h)
             x = deconv2d("x_dec", x, 3, [5, 5])
@@ -211,16 +216,16 @@ class CVAE1(object):
         obj = tf.reduce_sum(kl_obj - log_pxz)
 
         if self.mode == "train" and gpu == hps.num_gpus - 1:
-            tf.scalar_summary("model/log_pxz", -tf.reduce_mean(log_pxz))
-            tf.scalar_summary("model/kl_obj", tf.reduce_mean(kl_obj))
-            tf.scalar_summary("model/kl_cost", tf.reduce_mean(kl_cost))
+            tf.summary.scalar("model/log_pxz", -tf.reduce_mean(log_pxz))
+            tf.summary.scalar("model/kl_obj", tf.reduce_mean(kl_obj))
+            tf.summary.scalar("model/kl_cost", tf.reduce_mean(kl_cost))
 
         loss = tf.reduce_sum(compute_lowerbound(log_pxz, kl_cost, hps.k))
         return x, obj, loss
 
 
 def run(hps):
-    with tf.variable_scope("model") as vs:
+    with tf.variable_scope("model", reuse=False) as vs:
         x = get_inputs(hps.dataset, "train", hps.batch_size * FLAGS.num_gpus, hps.image_size)
 
         hps.num_gpus = 1
